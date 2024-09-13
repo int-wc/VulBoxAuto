@@ -3,21 +3,21 @@ import csv
 import json
 import argparse
 import time
+import os
 from termcolor import colored
-
+from fuzzywuzzy import process
 
 # 字符画
 ascii_art = """
  _    __      ______             ___         __      
 | |  / /_  __/ / __ )____  _  __/   | __  __/ /_____ 
-| | / / / / / / __  / __ \| |/_/ /| |/ / / / __/ __ \\
+| | / / / / / / __  / __ \\| |/_/ /| |/ / / / __/ __ \\
 | |/ / /_/ / / /_/ / /_/ />  </ ___ / /_/ / /_/ /_/ /
 |___/\\__,_/_/_____\\____/_/|_/_/  |\\__,_/\\__/\\____/ 
 """
 
 print(ascii_art)
 print("作者: weichai\n\n\n")
-
 
 # 使用 argparse 获取命令行参数
 parser = argparse.ArgumentParser(description="自动提交漏洞信息并查询地理位置")
@@ -70,6 +70,17 @@ def get_location_from_city_or_firm(keyword, api_key):
             poi = geo_data['pois'][0]  # 使用第一个搜索结果
             province = poi.get('pname', '')
             city = poi.get('cityname', '')
+            
+            # 特例处理：重庆市、北京市、上海市
+            if province in ['重庆市', '北京市', '上海市']:
+                if province == '重庆市':
+                    return ['重庆', '']  # 重庆市返回 ['重庆', '']
+                elif province == '北京市':
+                    return ['北京', '北京市']  # 北京市返回 ['北京', '北京市']
+                elif province == '上海市':
+                    return ['上海', '上海市']  # 上海市返回 ['上海', '上海市']
+
+            # 默认情况返回省份和城市
             return [province, city if city else province]
         else:
             print(f"未找到相关地理位置: {keyword}")
@@ -78,7 +89,7 @@ def get_location_from_city_or_firm(keyword, api_key):
         print(f"地理位置查询失败: {response.status_code}")
         return ["未知", "未知"]
 
-# 通过市级名称获取对应省份
+# 通过市级名称获取对应省份并去除省份中的“省”字
 def get_province_from_city(city, api_key):
     params = {
         'keywords': city,
@@ -90,6 +101,7 @@ def get_province_from_city(city, api_key):
         geo_data = response.json()
         if geo_data['status'] == '1' and geo_data['districts']:
             province = geo_data['districts'][0].get('province', '')
+            province = province.replace('省', '')
             return province
         else:
             print(f"未找到与城市 '{city}' 对应的省份")
@@ -104,24 +116,53 @@ success_count = 0
 failure_count = 0
 failures = []
 
+# 定义关键字字典
+company_keywords_dict = {
+    "基金": "基金/证券/期货/投资",
+    "发展股份": "房地产开发/建筑/建材/工程",
+    "科技": "计算机软件",
+    "能源": "计算机软件",
+    "信息": "计算机软件",
+    "医院": "医疗/保健/美容/卫生服务",
+    "网络": "计算机软件",
+    "环境": "环保",
+    "设计": "规划/设计/装潢",
+    "云计算": "计算机软件",
+    "科技发展": "计算机软件",
+    "环境科技": "环保",
+    "平面设计": "规划/设计/装潢"
+}
+
+# 根据厂商信息提取关键字并确定行业
+def determine_industry(firm_name):
+    keywords = list(company_keywords_dict.keys())
+    best_match = process.extractOne(firm_name, keywords)
+    if best_match and best_match[1] > 80:  # 设置一个阈值，确保匹配质量
+        return company_keywords_dict[best_match[0]]
+    return "未知"
+
 with open(csv_file, mode='r', encoding='utf-8-sig') as file:
     reader = csv.DictReader(file)
-    
-    # print(f"CSV 字段名: {reader.fieldnames}")
     
     for row in reader:
         row = {key.strip(): value for key, value in row.items()}
         firm_name = row['厂商信息']
         print(f"正在查询厂商: {firm_name}")
-        
+    
         # 使用厂商信息来查询地理位置
         area = get_location_from_city_or_firm(firm_name, args.geo_api_key)
-        
+        if area[0]:
+            area[0] = area[0].replace('省','')
         # 如果省份缺失，根据市级信息获取省份
         if not area[0] and area[1]:
             area[0] = get_province_from_city(area[1], args.geo_api_key)
+            print("省份缺失，正在查询省份")
         
         print(f"厂商: {firm_name}, 地理位置: {area}")
+
+        # 确定行业
+        industry = determine_industry(firm_name)
+        print(f"厂商: {firm_name}, 行业: {industry}")
         
         # 模拟提交数据
         data = {
@@ -129,7 +170,7 @@ with open(csv_file, mode='r', encoding='utf-8-sig') as file:
             "bug_title": row['漏洞标题'],
             "protocol": True,
             "area": area,
-            "industry": row['行业'],
+            "industry": industry,
             "bug_display": False,
             "bug_category": 1,
             "bug_star": 0,
@@ -139,7 +180,7 @@ with open(csv_file, mode='r', encoding='utf-8-sig') as file:
             "bug_level": 2,
             "bug_url": row['漏洞url/位置'],
             "bug_paper": row['漏洞简述'],
-            "repetition_step": row['复现步骤'],
+            "repetition_step": row['复现步骤'],  # 将更新后的复现步骤加入到data中
             "fix_plan": row['修复方案'],
             "draft_id": None
         }
