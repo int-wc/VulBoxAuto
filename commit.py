@@ -70,6 +70,7 @@ def get_location_from_city_or_firm(keyword, api_key):
             poi = geo_data['pois'][0]  # 使用第一个搜索结果
             province = poi.get('pname', '')
             city = poi.get('cityname', '')
+            city = city.replace('市','')
             
             # 特例处理：重庆市、北京市、上海市
             if province in ['重庆市', '北京市', '上海市']:
